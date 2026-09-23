@@ -1314,7 +1314,9 @@ body:has(#languageScreen:not(.hidden)) .navbar{
 
 
 .hero h1 .hero-play{color:inherit;} .hero h1 .hero-understand{color:var(--primary);}
-</style>
+
+    .story-line-break { height: 28px; }
+  </style>
 
 
 <style id="memoraCarePlanStyles">
@@ -2047,14 +2049,6 @@ body:has(#languageScreen:not(.hidden)) .navbar{
                 <b>🏥 clinic</b>
                 before returning home.
 
-            </div>
-
-
-            <div
-                id="memoryCountdown"
-                class="count"
-            >
-                10
             </div>
 
 
@@ -2804,7 +2798,6 @@ function resetMemoryJourneyUI(){
     $("memoryIntro")?.classList.remove("hidden");
     $("memoryQuestions")?.classList.add("hidden");
     $("memoryStartButton").disabled = false;
-    $("memoryCountdown").textContent = "10";
     pctBar("g1bar",0);
 }
 
@@ -3212,8 +3205,20 @@ function sampleCheckpointQuestions(pool, n){
     return shuffled.slice(0, n);
 }
 
+// Single source of truth: the pretty bold+emoji HTML shown on screen, and
+// the plain-text speech, are both derived from the exact same content —
+// they can never drift apart again.
+function mjStoryHtml(){
+    return "This morning, your neighbor <b>Ravi</b> gave you a <b>🍎 red apple</b> at the <b>🚪 gate</b>.<br><br>You went to the <b>🛒 shop</b> and bought a <b>🥛 milk</b>.<br><br>Then you visited the <b>🌳 park</b> and saw a <b>🚲 red bicycle</b> near the <b>🪑 bench</b>.<br><br>Finally, you visited the <b>🏥 clinic</b> to meet the <b>👨‍⚕️ doctor</b> before returning home for <b>🍽️ lunch</b>.";
+}
+
 function mjStoryText(){
-    return "This morning, your neighbor Ravi gave you a red apple at the gate. You walked to the shop and bought a bottle of milk. On the way, you stopped at the park and saw a red bicycle near the bench. After that, you visited the clinic to meet the doctor before finally returning home for lunch.";
+    return mjStoryHtml()
+        .replace(/<br\s*\/?>/gi, ' ')
+        .replace(/<[^>]*>/g, '')
+        .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{200D}]/gu, '')
+        .replace(/\s+/g, ' ')
+        .trim();
 }
 
 function startMemoryGame(){
@@ -3239,9 +3244,9 @@ function startMemoryGame(){
 
     // Fresh attempt: new day, or the previous checkpoint was not passed at
     // the 80% threshold (a fail always restarts at 0 min on the next Start).
-    const storyText = mjStoryText();
     const storyEl = $("memoryStory");
-    if(storyEl) storyEl.innerHTML = storyText; // same text as what's about to be spoken — keeps display and narration in sync
+    if(storyEl) storyEl.innerHTML = '<b>Story:</b><br><br>' + mjStoryHtml(); // rich display; mjStoryText() (spoken) is derived from this same content, so they can't diverge
+    const storyText = mjStoryText();
 
     let started = false;
     const proceed = () => {
@@ -3481,8 +3486,8 @@ let cardMoves = 0;
 let cardLock = false;
 let mmPairCount = 2;       // ramps by a fixed per-stage schedule, see MM_STAGE_PAIR_COUNTS below
 let mmStagesCompleted = 0; // full "new game" resets these — see window.startCardGame override
-// Fixed difficulty schedule, not performance-conditional: stages 1-2 use 2 pairs,
-// stages 3-4 use 4 pairs, stage 5 uses 6 pairs. Index = stages completed so far.
+// Fixed 2-row matrix progression: 2x2 -> 2x3 -> 2x4 -> 2x5.
+// Each entry is the number of pairs, so the board always has exactly 2 rows.
 const MM_STAGE_PAIR_COUNTS = [2,2,4,4,6];
 
 function buildMemoryCardsBoard(){
@@ -3496,6 +3501,12 @@ function buildMemoryCardsBoard(){
     cardLock = false;
     cardStart = performance.now();
 
+    const gridColumns = mmPairCount;
+    // Keep every card the same size as the 2x4 layout. The grid expands
+    // horizontally for 2x5 instead of enlarging cards on smaller stages.
+    $("memoryGrid").style.gridTemplateColumns = `repeat(${gridColumns}, 162.5px)`;
+    $("memoryGrid").style.width = "max-content";
+    $("memoryGrid").style.maxWidth = "100%";
     $("memoryGrid").innerHTML = cards.map((c,i) => `
         <div class="memory-card" id="mc${i}" onclick="flipCard(${i})">
             <div class="card-inner">
@@ -3510,7 +3521,7 @@ function buildMemoryCardsBoard(){
     const timerEl = $("g2timer");
     if(timerEl) timerEl.style.display = "none";
 
-    pctBar("g2bar", Math.round((mmStagesCompleted / 5) * 100));
+    pctBar("g2bar", Math.round((mmStagesCompleted / MM_STAGE_PAIR_COUNTS.length) * 100));
 }
 
 function startCardGame(){
@@ -4125,7 +4136,11 @@ function getBalloonStats(b){
 
     const timeMs = Number(b?.timeMs) || 0;
     const acc = total ? clamp(100 - (wrong/total)*100) : 100;
-    const timeScore = timeMs ? clamp(100 - (timeMs/1000)*0.8) : 100;
+    // Recalibrated to match the dashboard's speed metric — a full 6-round
+    // session has ~42s of built-in preview time alone, so the "0" ceiling
+    // needs real headroom (4 minutes), not a per-second penalty that floors
+    // out well before a session can even finish.
+    const timeScore = timeMs ? clamp(100 - (timeMs/240000)*100) : 100;
     const score = Math.round(clamp(acc*0.7 + timeScore*0.3));
 
     const reactions = rounds.map(x => Number(x.reactionMs)).filter(x => Number.isFinite(x) && x >= 0);
@@ -5359,7 +5374,7 @@ const I18N = {
     chooseGame:"Choose a Cognitive Game", gameSelectorSubtitle:"Select any game whenever you want. Return here after every game and choose another activity.", gameBadge:"MEMORA PRESENTS GENOGAME", memoryJourney:"Memory Journey", memoryJourneyDesc:"Remember the story, objects and journey sequence.", playGame1:"Play Game 1 →", memoryCards:"Memory Cards", memoryCardsDesc:"Memorize cards and find the matching pairs.", playGame2:"Play Game 2 →", catchBalloon:"Catch the Balloon", catchBalloonDesc:"Use your hand to pop balloons in the remembered order.", playGame3:"Play Game 3 →", patientProfileBack:"← Patient Profile", viewResults:"View Progress / Results", memoryJourneyDesc2:"Remember the story and journey.", game1of3:"Game 1 of 3", backGames:"← Games", rememberJourney:"Remember the Journey", home:"Home", shop:"Shop", park:"Park", clinic:"Clinic", storyLabel:"Story:", startMemoryJourney:"Start Memory Journey",
     game2of3:"Game 2 of 3", memoryCardsDesc2:"Find and match the hidden pairs.", memorizeCards:"Memorize the cards", startMemoryCards:"Start Memory Cards", game3of3:"Game 3 of 3", catchBalloonDesc2:"Use your hand to pop the balloons in the same order.", balloonPressStart:"Press start, then allow camera access.", cameraOff:"Camera is off.", startBalloon:"Start Catch the Balloon", stopCamera:"Stop Camera", behavioralSignal:"Behavioral Signal", handDetections:"Hand detections", faceFrames:"Face frames", headMovement:"Head movement",
     cognitiveReport:"Cognitive Game Performance Report", gamePerformance:"Game Performance", balloonAnalysis:"Balloon Analysis", mlBehavior:"ML-Assisted Behavioral Analysis", previousSessions:"Previous Sessions", important:"Important:", emailGuardian:"Email Parent / Guardian", emailDoctor:"Email Doctor", downloadReport:"Download Report", newSession:"New Session",
-    storyTitle:"Remember the Journey", story:"Your neighbor <b>Ravi</b> gave you an <b>🍎 apple</b>.<br><br>You went to the <b>🛒 shop</b> and bought <b>🥛 milk</b>.<br><br>Then you visited the <b>🌳 park</b> and saw a <b>🚲 red bicycle</b>.<br><br>Finally, you went to the <b>🏥 clinic</b> before returning home.",
+    storyTitle:"Remember the Journey", story:"This morning, your neighbor <b>Ravi</b> gave you a <b>🍎 red apple</b> at the <b>🚪 gate</b>.<br><br>You went to the <b>🛒 shop</b> and bought a <b>🥛 milk</b>.<br><br>Then you visited the <b>🌳 park</b> and saw a <b>🚲 red bicycle</b> near the <b>🪑 bench</b>.<br><br>Finally, you visited the <b>🏥 clinic</b> to meet the <b>👨‍⚕️ doctor</b> before returning home for <b>🍽️ lunch</b>.",
     q1:"Who gave you the apple?", q2:"What did you buy at the shop?", q3:"What colour was the bicycle?", q4:"Where did you go before returning home?", q5:"What was the first place in the journey?",
     ravi:"Ravi", arun:"Arun", doctor:"Doctor", shopkeeper:"Shopkeeper", bread:"Bread", milk:"Milk", rice:"Rice", juice:"Juice", blue:"Blue", green:"Green", red:"Red", yellow:"Yellow", school:"School", station:"Station",
     predictionLabel:"Prediction:", recommendationLabel:"Recommendation:", probabilityDistribution:"Probability Distribution", prototypeConfidence:"Prototype model confidence", adaptiveAnalysis:"AI Adaptive Difficulty Analysis", findPairs:"Find the pairs", nowPop:"Now pop them in the same order.", correctSequence:"Correct sequence! Next round starts in 2 seconds.", excellentAll:"Excellent — all 8 levels completed.", gameEnded:"Game ended at round", resultsRunning:"Running ML analysis...", noBalloonData:"No balloon data.", completedAll:"Completed all rounds", maxSequence:"Maximum sequence:", failedAt:"Failed at:", correctPops:"Correct balloon pops:", errors:"Wrong balloon attempts / errors:", totalAttempts:"Total balloon attempts:", patternAccuracy:"Pattern accuracy:", averageReaction:"Average reaction time:", fastestReaction:"Fastest reaction:", slowestReaction:"Slowest reaction:", overallScore:"Overall game score", mlSending:"Sending game data to Python ML backend...", pleaseWait:"Please wait."
@@ -5449,7 +5464,7 @@ function applyLanguage(){
   nodes.forEach(node=>{const el=node.parentElement;if(!el)return;if(!el.dataset.genoOriginal){const raw=node.nodeValue,key=reverse[raw.trim()];if(key){el.dataset.genoOriginal=raw;el.dataset.genoKey=key;}}const key=el.dataset.genoKey;if(key){const raw=el.dataset.genoOriginal;node.nodeValue=raw.replace(raw.trim(),t(key));}});
   const ph={'Patient name':'patientName','P001':'patientId','Example: 72 years':'dobAge','Optional':'phoneEmail','Parent or guardian':'guardianNamePlaceholder','Son / Daughter / Guardian':'guardianRelationPlaceholder','Dr. ...':'doctorNamePlaceholder','Hospital / clinic':'clinic','+91...':'phonePlaceholder','guardian@example.com':'guardianEmailPlaceholder','doctor@example.com':'doctorEmailPlaceholder'};
   document.querySelectorAll('input[placeholder]').forEach(el=>{const raw=el.dataset.genoPh||(el.dataset.genoPh=el.placeholder);if(ph[raw])el.placeholder=t(ph[raw]);});
-  const story=document.getElementById('memoryStory');if(story&&typeof mjStoryText==='function')story.innerHTML=mjStoryText();
+  const story=document.getElementById('memoryStory');if(story&&typeof mjStoryHtml==='function')story.innerHTML='<b>Story:</b><br><br>'+mjStoryHtml();
   if(typeof memoryQuestions!=='undefined')memoryQuestions=getMemoryQuestions();
 }
 let splashTransitioning=false;
@@ -6080,6 +6095,10 @@ beginSession=function(){
   const clamp2 = (n,a=0,b=100)=>Math.max(a,Math.min(b,n));
   const stdev = a=>{ if(!a||a.length<2)return 0; const m=avg(a); return Math.sqrt(avg(a.map(x=>(x-m)**2))); };
   const pct = n=>Math.round(clamp2(n));
+  // Renders "—" for a metric that has no data yet (game not played this
+  // session) instead of a bare 0/100, which would read as a scored failure.
+  const fmtMetric = v => v==null ? '—' : v;
+  const fmtMetric100 = v => v==null ? 'Not played yet' : v+'/100';
 
   /* -------------------- GAME 1 -------------------- */
   let g1 = {questions:[], currentStart:0};
@@ -6206,13 +6225,12 @@ beginSession=function(){
           mmLastWrongPair=pair;
         }
         flipped=[]; cardLock=false;
-        pctBar('g2bar', Math.round(((mmStagesCompleted + matched/mmPairCount)/5)*100));
+        pctBar('g2bar', Math.round(((mmStagesCompleted + matched/mmPairCount)/MM_STAGE_PAIR_COUNTS.length)*100));
         if(matched===mmPairCount){
           mmStagesCompleted++;
-          // Fixed pair-count schedule by stage, not performance-conditional:
-          // stages 1-2 -> 2 pairs, stages 3-4 -> 4 pairs, stage 5 -> 6 pairs.
+          // Fixed 2-row matrix progression: 2x2 -> 2x3 -> 2x4 -> 2x5.
           mmPairCount = MM_STAGE_PAIR_COUNTS[mmStagesCompleted] || MM_STAGE_PAIR_COUNTS[MM_STAGE_PAIR_COUNTS.length-1];
-          if(mmStagesCompleted>=5){
+          if(mmStagesCompleted>=MM_STAGE_PAIR_COUNTS.length){
             finishCards();
           }else{
             setTimeout(()=>{ g2.counts={}; old.startCardGame(); }, 700); // fresh per-card selection budget for the new stage's board
@@ -6229,7 +6247,15 @@ beginSession=function(){
     const totalErrors=g2.pairAttempts.filter(x=>!x.correct).length;
     const trialsToSuccess=g2.pairAttempts.length;
     const correctPairs=g2.pairAttempts.filter(x=>x.correct).length;
-    const score=clamp2(Math.round(100-totalErrors*6-mcPerseverative*4));
+    // Proportional, not a flat per-error deduction: a fixed "-6 per error"
+    // floored to 0 after only ~17 errors, which is far too easy to reach
+    // across a full 5-stage, 18-pair game (2+2+4+4+6) — someone who
+    // eventually completes the whole game with a moderate number of
+    // mistakes was scoring 0, indistinguishable from never finishing at
+    // all. Error RATE (wrong ÷ total attempts) scales naturally with
+    // however long the game actually is.
+    const errorRate = trialsToSuccess ? totalErrors/trialsToSuccess : 0;
+    const score=clamp2(Math.round(100 - errorRate*150 - mcPerseverative*2));
     session.games.memoryCards={
       score, matches:correctPairs, moves:trialsToSuccess, durationMs:time,
       stagesCompleted:mmStagesCompleted, pairCountFinal:mmPairCount,
@@ -6283,48 +6309,74 @@ beginSession=function(){
     const mcErrors=num(mm.totalErrors);
     const mcPersev=num(mm.perseverativeErrors);
     const mcSpreadErr=num(mm.spreadErrors);
+    const balloonPlayed = bTotal > 0;
+    const memoryCardsPlayed = mcTrials > 0;
 
     // MEMORY: Journey retention-rate signal blended with Memory Cards associative-memory efficiency
     const journeySignal=curve.length?retentionRatePct:sc.g1;
-    const memoryCardsEfficiency=mcTrials?clamp2(100-mcErrors*6-mcPersev*4):sc.g2;
+    const mcErrorRate = mcTrials ? mcErrors/mcTrials : 0;
+    const memoryCardsEfficiency=mcTrials?clamp2(100-mcErrorRate*150-mcPersev*2):sc.g2;
     const memory=(curve.length&&mcTrials)?(journeySignal+memoryCardsEfficiency)/2:Math.max(journeySignal,memoryCardsEfficiency);
 
-    // RESPONSE SPEED / ATTENTION: Balloon session time + accuracy
-    const speed=bTimeMs?clamp2(100-(bTimeMs/45000*100)):sc.g3;
-    const attention=bTotal?clamp2(100-(bWrong/bTotal)*100):sc.g3;
+    // RESPONSE SPEED / ATTENTION: Balloon session time + accuracy — null (not 0)
+    // when Catch the Balloon wasn't played this session, so "didn't attempt it"
+    // is never shown as if it were a scored failure.
+    // Recalibrated: a full 6-round session has ~42s of built-in preview-reveal
+    // time alone (sum of 1..6 balloons shown for 2s each) plus inter-round
+    // pauses and actual reaction time — the old 45s threshold floored almost
+    // every real playthrough to 0 regardless of speed. 4 minutes is now the
+    // "0" ceiling, giving real headroom for genuine fast-vs-slow differences.
+    const speed = balloonPlayed ? clamp2(100-(bTimeMs/240000*100)) : null;
+    const attention = balloonPlayed ? clamp2(100-(bWrong/bTotal)*100) : null;
 
     // EXECUTIVE / ERROR CONTROL: Balloon perseveration + Memory Cards perseveration
     const executiveFromBalloon=bTotal?clamp2(100-bPersev*8):50;
     const executiveFromMemoryCards=mcTrials?clamp2(100-mcPersev*8):50;
     const errorControl=(bTotal||mcTrials)?(executiveFromBalloon+executiveFromMemoryCards)/2:sc.g3;
 
-    // SEQUENCE / VISUOSPATIAL: Memory Cards stage progression + Balloon max round reached (of 6)
-    const stageProgress=num(mm.pairCountFinal)?clamp2((num(mm.pairCountFinal)-2)/6*100):0;
-    const balloonSeqProgress=bMaxSeq?clamp2((bMaxSeq/6)*100):null;
-    const sequence=balloonSeqProgress!=null?(stageProgress+balloonSeqProgress)/2:(stageProgress||sc.g3);
+    // SEQUENCE / VISUOSPATIAL: Memory Cards stage progression + Balloon max round reached (of 6),
+    // each penalized by how many mistakes it took to get there — otherwise this floors at 100 for
+    // almost anyone who simply finishes a session, since neither game has a "give up" state
+    // (every pair eventually gets matched, every balloon round eventually gets popped).
+    const maxPairCount = MM_STAGE_PAIR_COUNTS[MM_STAGE_PAIR_COUNTS.length-1];
+    const stageProgress=num(mm.pairCountFinal)?clamp2((num(mm.pairCountFinal)-2)/(maxPairCount-2)*100 - mcErrors*3):0;
+    const balloonSeqProgress=bMaxSeq?clamp2((bMaxSeq/6)*100 - bWrong*3):null;
+    const sequence=(memoryCardsPlayed||balloonPlayed)
+      ? (balloonSeqProgress!=null?(stageProgress+balloonSeqProgress)/2:stageProgress)
+      : null;
 
     const rawErrors=mcErrors+bWrong;
-    const overall=Math.round((memory+speed+attention+errorControl+sequence)/5);
+    const overallParts=[memory,speed,attention,errorControl,sequence].filter(v=>v!=null);
+    const overall=overallParts.length?Math.round(overallParts.reduce((a,v)=>a+v,0)/overallParts.length):0;
+
+    const pctOrNull = v => v==null ? null : pct(v);
 
     return {
-      memory:pct(memory), speed:pct(speed), attention:pct(attention),
-      errors:Math.round(rawErrors), errorControl:pct(errorControl), sequence:pct(sequence), overall:pct(overall),
+      memory:pct(memory), speed:pctOrNull(speed), attention:pctOrNull(attention),
+      errors:Math.round(rawErrors), errorControl:pct(errorControl), sequence:pctOrNull(sequence), overall:pct(overall),
       g1:pct(sc.g1), g2:pct(sc.g2), g3:pct(sc.g3),
       retentionRate:Math.round(retentionRatePct), stoppingPoint, retentionCurve:curve,
       perseverativeErrors:mcPersev+bPersev,
       memoryCardsPerseverative:mcPersev, memoryCardsSpread:mcSpreadErr,
       balloonPerseverative:bPersev, balloonSpread:bSpreadErr,
-      balloonTimeMs:bTimeMs, balloonMaxSequence:bMaxSeq
+      balloonTimeMs:bTimeMs, balloonMaxSequence:bMaxSeq,
+      balloonPlayed, memoryCardsPlayed, memoryJourneyPlayed:curve.length>0
     };
   }
 
   function allSessions(){const arr=[...(profile?.sessions||[])]; if(session&&!arr.some(x=>x.id===session.id))arr.push(session);return arr.sort((a,b)=>new Date(a.startedAt)-new Date(b.startedAt));}
   function metricLabel(k){return {memory:'Memory',speed:'Response Speed',attention:'Attention / Accuracy',errorControl:'Repetition & Error Control',sequence:'Sequence Performance',overall:'Overall Behavioral Score'}[k]||'Overall Behavioral Score';}
   function svgChart(sessions,key){
-    const W=850,H=330,L=58,R=24,T=25,B=55; const vals=sessions.map(s=>sessionMetrics(s)[key]); const max=100,min=0; const pts=vals.map((v,i)=>{const x=L+(sessions.length===1?0.5:(i/(sessions.length-1)))*(W-L-R);const y=T+(max-v)/(max-min)*(H-T-B);return [x,y,v];});
+    const W=850,H=330,L=58,R=24,T=25,B=55;
+    // Skip sessions where this metric has no data (game not played) rather
+    // than plotting a misleading dip to 0.
+    const entries=sessions.map((s,i)=>({i,v:sessionMetrics(s)[key]})).filter(e=>e.v!=null);
+    const max=100,min=0;
+    const pts=entries.map((e,idx)=>{const x=L+(entries.length===1?0.5:(idx/(entries.length-1)))*(W-L-R);const y=T+(max-e.v)/(max-min)*(H-T-B);return [x,y,e.v,e.i];});
+    if(!pts.length) return `<svg viewBox="0 0 ${W} ${H}" class="perf-svg"><text x="${W/2}" y="${H/2}" text-anchor="middle" class="axis">No sessions with this activity yet</text></svg>`;
     const path=pts.map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ');
     const grid=[0,25,50,75,100].map(v=>{const y=T+(100-v)/100*(H-T-B);return `<line x1="${L}" y1="${y}" x2="${W-R}" y2="${y}" class="gridline"/><text x="${L-10}" y="${y+4}" text-anchor="end" class="axis">${v}</text>`}).join('');
-    const labels=pts.map((p,i)=>`<text x="${p[0]}" y="${H-B+22}" text-anchor="middle" class="axis">S${i+1}</text><circle cx="${p[0]}" cy="${p[1]}" r="6" class="point"/><text x="${p[0]}" y="${p[1]-12}" text-anchor="middle" class="value">${p[2]}</text>`).join('');
+    const labels=pts.map((p)=>`<text x="${p[0]}" y="${H-B+22}" text-anchor="middle" class="axis">S${p[3]+1}</text><circle cx="${p[0]}" cy="${p[1]}" r="6" class="point"/><text x="${p[0]}" y="${p[1]-12}" text-anchor="middle" class="value">${p[2]}</text>`).join('');
     return `<svg viewBox="0 0 ${W} ${H}" class="perf-svg" role="img" aria-label="${esc(metricLabel(key))} across sessions">${grid}<path d="${path}" class="trendline"/>${labels}<line x1="${L}" y1="${T}" x2="${L}" y2="${H-B}" class="axisline"/><line x1="${L}" y1="${H-B}" x2="${W-R}" y2="${H-B}" class="axisline"/><text x="18" y="${T-4}" class="axis-title">Score</text></svg>`;
   }
 
@@ -6361,8 +6413,8 @@ beginSession=function(){
             <h2>🌷 Today's Performance</h2>
             <p>${patientSummary(current)}</p>
             <div class="patient-mini-row"><span>Memory</span><b>${current.memory}/100</b></div>
-            <div class="patient-mini-row"><span>Attention & Accuracy</span><b>${current.attention}/100</b></div>
-            <div class="patient-mini-row"><span>Sequence Performance</span><b>${current.sequence}/100</b></div>
+            <div class="patient-mini-row"><span>Attention & Accuracy</span><b>${fmtMetric100(current.attention)}</b></div>
+            <div class="patient-mini-row"><span>Sequence Performance</span><b>${fmtMetric100(current.sequence)}</b></div>
           </div>
           <div class="card patient-encourage-card">
             <div class="big-emoji">🌱</div>
@@ -6374,7 +6426,7 @@ beginSession=function(){
 
         <div class="card patient-session-card">
           <div class="section-head"><div><h2>📅 Session Summary</h2><p>${latest?new Date(latest.startedAt).toLocaleString():'No session date'}</p></div><span class="session-pill">Session ${sessions.length}</span></div>
-          <div class="patient-session-stats"><div><small>Response Speed</small><b>${current.speed}</b></div><div><small>Attention / Accuracy</small><b>${current.attention}</b></div><div><small>Sequence</small><b>${current.sequence}</b></div></div>
+          <div class="patient-session-stats"><div><small>Response Speed</small><b>${fmtMetric(current.speed)}</b></div><div><small>Attention / Accuracy</small><b>${fmtMetric(current.attention)}</b></div><div><small>Sequence</small><b>${fmtMetric(current.sequence)}</b></div></div>
         </div>
 
         <div class="patient-actions">
@@ -6443,7 +6495,7 @@ beginSession=function(){
     const W=900,H=280,L=65,R=28,T=25,B=55;const vals=sessions.map(s=>sessionMetrics(s).errors);const max=Math.max(10,...vals);const pts=vals.map((v,i)=>{const x=L+(sessions.length===1?.5:i/(sessions.length-1))*(W-L-R);const y=T+(max-v)/max*(H-T-B);return [x,y,v];});const path=pts.map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ');const grid=[0,.25,.5,.75,1].map(q=>{const y=T+q*(H-T-B),v=Math.round(max*(1-q));return `<line x1="${L}" y1="${y}" x2="${W-R}" y2="${y}" class="gridline"/><text x="${L-12}" y="${y+4}" text-anchor="end" class="axis">${v}</text>`}).join('');const marks=pts.map((p,i)=>`<circle cx="${p[0]}" cy="${p[1]}" r="6" class="error-point"/><text x="${p[0]}" y="${p[1]-12}" text-anchor="middle" class="value">${p[2]}</text><text x="${p[0]}" y="${H-B+22}" text-anchor="middle" class="axis">S${i+1}</text>`).join('');return `<svg viewBox="0 0 ${W} ${H}" class="perf-svg"><line x1="${L}" y1="${T}" x2="${L}" y2="${H-B}" class="axisline"/><line x1="${L}" y1="${H-B}" x2="${W-R}" y2="${H-B}" class="axisline"/>${grid}<path d="${path}" class="error-line"/>${marks}<text x="18" y="${T-4}" class="axis-title">Errors</text></svg>`;
   }
 
-  function insightHtml(s){if(!s)return '<p class="muted">No session data yet.</p>';const m=sessionMetrics(s),sessions=allSessions(),idx=sessions.findIndex(x=>x.id===s.id),prev=idx>0?sessionMetrics(sessions[idx-1]):null;let reasons=[];if(prev&&m.speed<prev.speed)reasons.push('slower response speed');if(prev&&m.errors>prev.errors)reasons.push('more repetition/errors');if(prev&&m.memory<prev.memory)reasons.push('lower memory-game performance');return `<div class="insight-date">Session ${idx+1} • ${new Date(s.startedAt).toLocaleDateString()}</div><div class="insight-score">${m.overall}<span>/100</span></div><p>${prev?`Compared with the previous session, ${reasons.length?reasons.join(', '):'the overall behavioral profile changed modestly'}.`:'This is the first recorded session, so it establishes the baseline.'}</p><ul><li>Memory: <b>${m.memory}</b></li><li>Response Speed: <b>${m.speed}</b></li><li>Attention / Accuracy: <b>${m.attention}</b></li><li>Error count: <b>${m.errors}</b></li><li>Sequence Performance: <b>${m.sequence}</b></li></ul>`;}
+  function insightHtml(s){if(!s)return '<p class="muted">No session data yet.</p>';const m=sessionMetrics(s),sessions=allSessions(),idx=sessions.findIndex(x=>x.id===s.id),prev=idx>0?sessionMetrics(sessions[idx-1]):null;let reasons=[];if(prev&&m.speed!=null&&prev.speed!=null&&m.speed<prev.speed)reasons.push('slower response speed');if(prev&&m.errors>prev.errors)reasons.push('more repetition/errors');if(prev&&m.memory<prev.memory)reasons.push('lower memory-game performance');return `<div class="insight-date">Session ${idx+1} • ${new Date(s.startedAt).toLocaleDateString()}</div><div class="insight-score">${m.overall}<span>/100</span></div><p>${prev?`Compared with the previous session, ${reasons.length?reasons.join(', '):'the overall behavioral profile changed modestly'}.`:'This is the first recorded session, so it establishes the baseline.'}</p><ul><li>Memory: <b>${m.memory}</b></li><li>Response Speed: <b>${fmtMetric(m.speed)}</b></li><li>Attention / Accuracy: <b>${fmtMetric(m.attention)}</b></li><li>Error count: <b>${m.errors}</b></li><li>Sequence Performance: <b>${fmtMetric(m.sequence)}</b></li></ul>`;}
   function narrativeFeedback(s){
     if(!s) return '';
     const g=s.games||{}, g1=g.memoryJourney||{}, g2=g.memoryCards||{}, g3=g.catchBalloon||{};
@@ -6566,7 +6618,7 @@ beginSession=function(){
     }
 
     // Default catch-all for general "how is he doing" style questions.
-    return `Lately, ${name} has been doing ${m.overall>=60?'well':m.overall>=40?'okay':'a bit below the usual level'} — today's overall score was ${m.overall}/100. ${trendPhrase} Memory: ${m.memory}/100, Attention: ${m.attention}/100, Sequence: ${m.sequence}/100.`;
+    return `Lately, ${name} has been doing ${m.overall>=60?'well':m.overall>=40?'okay':'a bit below the usual level'} — today's overall score was ${m.overall}/100. ${trendPhrase} Memory: ${m.memory}/100, Attention: ${fmtMetric100(m.attention)}, Sequence: ${fmtMetric100(m.sequence)}.`;
   }
 
   function askPatientBot(question){
@@ -6734,7 +6786,7 @@ beginSession=function(){
     // Re-render the Memory Journey story: must match mjStoryText(), the same
     // text used for narration — otherwise speech and display can disagree.
     const story=document.getElementById('memoryStory');
-    if(story && typeof mjStoryText==='function') story.innerHTML=mjStoryText();
+    if(story && typeof mjStoryHtml==='function') story.innerHTML='<b>Story:</b><br><br>'+mjStoryHtml();
   }
   window.memoraLocalize=localizeTree;
 
@@ -6829,7 +6881,7 @@ beginSession=function(){
     const W=900,H=280,Lft=65,R=28,T=25,B=55,vals=sessions.map(s=>sessionMetrics(s).errors),max=Math.max(10,...vals),pts=vals.map((v,i)=>{const x=Lft+(sessions.length===1?.5:i/(sessions.length-1))*(W-Lft-R),y=T+(max-v)/max*(H-T-B);return [x,y,v]}),path=pts.map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(''),grid=[0,.25,.5,.75,1].map(q=>{const y=T+q*(H-T-B),v=Math.round(max*(1-q));return `<line x1="${Lft}" y1="${y}" x2="${W-R}" y2="${y}" class="gridline"/><text x="${Lft-12}" y="${y+4}" text-anchor="end" class="axis">${v}</text>`}).join(''),marks=pts.map((p,i)=>`<circle cx="${p[0]}" cy="${p[1]}" r="6" class="error-point"/><text x="${p[0]}" y="${p[1]-12}" text-anchor="middle" class="value">${p[2]}</text><text x="${p[0]}" y="${H-B+22}" text-anchor="middle" class="axis">S${i+1}</text>`).join('');
     return `<svg viewBox="0 0 ${W} ${H}" class="perf-svg"><line x1="${Lft}" y1="${T}" x2="${Lft}" y2="${H-B}" class="axisline"/><line x1="${Lft}" y1="${H-B}" x2="${W-R}" y2="${H-B}" class="axisline"/>${grid}<path d="${path}" class="error-line"/>${marks}<text x="18" y="${T-4}" class="axis-title">${esc2(tr('errorsAxis'))}</text></svg>`;
   };
-  window.insightHtml=function(s){if(!s)return `<p class="muted">${tr('noSession')}</p>`;const m=sessionMetrics(s),sessions=allSessions(),idx=sessions.findIndex(x=>x.id===s.id),prev=idx>0?sessionMetrics(sessions[idx-1]):null;let reasons=[];if(prev&&m.speed<prev.speed)reasons.push(tr('slower'));if(prev&&m.errors>prev.errors)reasons.push(tr('moreErrors'));if(prev&&m.memory<prev.memory)reasons.push(tr('lowerMemory'));return `<div class="insight-date">${tr('session')} ${idx+1} • ${new Date(s.startedAt).toLocaleDateString()}</div><div class="insight-score">${m.overall}<span>/100</span></div><p>${prev?tr('compared',{reason:reasons.length?reasons.join(', '):tr('changedModestly')}):tr('baseline')}</p><ul><li>${tr('memory')}: <b>${m.memory}</b></li><li>${tr('responseSpeed')}: <b>${m.speed}</b></li><li>${tr('attentionAccuracy')}: <b>${m.attention}</b></li><li>${tr('errors')}: <b>${m.errors}</b></li><li>${tr('sequencePerformance')}: <b>${m.sequence}</b></li></ul>`;};
+  window.insightHtml=function(s){if(!s)return `<p class="muted">${tr('noSession')}</p>`;const m=sessionMetrics(s),sessions=allSessions(),idx=sessions.findIndex(x=>x.id===s.id),prev=idx>0?sessionMetrics(sessions[idx-1]):null;let reasons=[];if(prev&&m.speed!=null&&prev.speed!=null&&m.speed<prev.speed)reasons.push(tr('slower'));if(prev&&m.errors>prev.errors)reasons.push(tr('moreErrors'));if(prev&&m.memory<prev.memory)reasons.push(tr('lowerMemory'));return `<div class="insight-date">${tr('session')} ${idx+1} • ${new Date(s.startedAt).toLocaleDateString()}</div><div class="insight-score">${m.overall}<span>/100</span></div><p>${prev?tr('compared',{reason:reasons.length?reasons.join(', '):tr('changedModestly')}):tr('baseline')}</p><ul><li>${tr('memory')}: <b>${m.memory}</b></li><li>${tr('responseSpeed')}: <b>${fmtMetric(m.speed)}</b></li><li>${tr('attentionAccuracy')}: <b>${fmtMetric(m.attention)}</b></li><li>${tr('errors')}: <b>${m.errors}</b></li><li>${tr('sequencePerformance')}: <b>${fmtMetric(m.sequence)}</b></li></ul>`;};
   window.evidenceHtml=function(s){if(!s)return '';const g=s.games||{},g1=g.memoryJourney||{},g2=g.memoryCards||{},g3=g.catchBalloon||{},maxCard=g2.selectionCounts?Math.max(0,...Object.values(g2.selectionCounts)):0;return `<div class="evidence-list"><div><b>${tr('memoryJourney')}</b><span>${num(g1.wrongAttempts)} ${tr('wrongAttempts')} • ${num(g1.multipleAttemptQuestions)} questions • ${num(g1.failedAfterFour)} failed after 4 attempts</span></div><div><b>${tr('memoryCards')}</b><span>${num(g2.totalSelections)} ${tr('cardSelection')} • ${num(g2.wrongPairs)} ${tr('wrongPairs')} • ${tr('sameCard')} ${num(g2.repeatedSameCardSelections)} • ${tr('longestRepetition')} ${num(g2.longestSameCardStreak)} • ${tr('maxSequence')} ${maxCard}</span></div><div><b>${tr('balloonSequence')}</b><span>${num(g3.wrongAttempts)} ${tr('wrongSelections')} • ${tr('longestRepetition')} ${num(g3.maxWrongStreak)} • ${tr('failed')} ${num(g3.failedRounds)} • ${tr('reactionVariability')} ${num(g3.reactionTimeVariability)} ms</span></div></div>`;};
   window.game1Html=function(s){const g=s?.games?.memoryJourney||{};return `<div class="mini-stats"><span>${tr('score')} <b>${num(g.score)}</b></span><span>${tr('accuracy')} <b>${num(g.accuracy)}%</b></span><span>${tr('wrongAttempts')} <b>${num(g.wrongAttempts)}</b></span><span>${tr('avgResponse')} <b>${g.responseTimes?.length?Math.round(avg(g.responseTimes)):0} ms</b></span><span>${tr('variability')} <b>${num(g.responseTimeVariability)} ms</b></span></div>`;};
   window.game2Html=function(s){const g=s?.games?.memoryCards||{};return `<div class="mini-stats"><span>${tr('score')} <b>${num(g.score)}</b></span><span>${tr('pairAttempts')} <b>${num(g.pairAttempts,g.moves)}</b></span><span>${tr('wrongPairs')} <b>${num(g.wrongPairs)}</b></span><span>${tr('sameCard')} <b>${num(g.repeatedSameCardSelections)}</b></span><span>${tr('longestRepetition')} <b>${num(g.longestSameCardStreak)}</b></span></div>`;};
@@ -6842,8 +6894,8 @@ beginSession=function(){
     root.innerHTML=`<div class="result-topbar"><button class="btn secondary" onclick="show('gameSelectScreen')">← ${tr('back')}</button><div class="result-switcher" role="tablist"><button id="patientTab" class="result-tab active" onclick="switchResultView('patient')">👤 ${tr('patientView')}</button><button id="doctorTab" class="result-tab" onclick="switchResultView('doctor')">🩺 ${tr('doctorView')}</button></div></div>
       <div class="result-view patient-result-view" id="patientResultView"><div class="patient-result-hero"><div><div class="dash-badge">MEMORA • GENOGAME</div><h1>${tr('yourResults')}</h1><p>${tr('wellDone',{name:esc2(profile?.name||'Patient')})}</p></div><div class="patient-score-ring"><span>${tr('overall')}</span><strong>${current.overall}</strong><small>/ 100</small></div></div>
       <div class="patient-metric-grid"><div class="patient-metric"><span>🧠</span><div><small>${tr('memoryJourney')}</small><b>${current.g1}/100</b></div></div><div class="patient-metric"><span>🃏</span><div><small>${tr('memoryCards')}</small><b>${current.g2}/100</b></div></div><div class="patient-metric"><span>🎈</span><div><small>${tr('balloonSequence')}</small><b>${current.g3}/100</b></div></div></div>
-      <div class="patient-simple-grid"><div class="card patient-analysis-card"><h2>🌷 ${tr('todayPerformance')}</h2><p>${patientSummary(current)}</p><div class="patient-mini-row"><span>${tr('memory')}</span><b>${current.memory}/100</b></div><div class="patient-mini-row"><span>${tr('attentionAccuracy')}</span><b>${current.attention}/100</b></div><div class="patient-mini-row"><span>${tr('sequence')}</span><b>${current.sequence}/100</b></div></div><div class="card patient-encourage-card"><div class="big-emoji">🌱</div><h2>${tr('keepGoing')}</h2><p>${tr('practiceText')}</p><p class="muted">${tr('detailsDoctor')}</p></div></div>
-      <div class="card patient-session-card"><div class="section-head"><div><h2>📅 ${tr('sessionSummary')}</h2><p>${latest?new Date(latest.startedAt).toLocaleString():'—'}</p></div><span class="session-pill">${tr('session')} ${sessions.length}</span></div><div class="patient-session-stats"><div><small>${tr('responseSpeed')}</small><b>${current.speed}</b></div><div><small>${tr('attentionAccuracy')}</small><b>${current.attention}</b></div><div><small>${tr('sequence')}</small><b>${current.sequence}</b></div></div></div>
+      <div class="patient-simple-grid"><div class="card patient-analysis-card"><h2>🌷 ${tr('todayPerformance')}</h2><p>${patientSummary(current)}</p><div class="patient-mini-row"><span>${tr('memory')}</span><b>${current.memory}/100</b></div><div class="patient-mini-row"><span>${tr('attentionAccuracy')}</span><b>${fmtMetric100(current.attention)}</b></div><div class="patient-mini-row"><span>${tr('sequence')}</span><b>${fmtMetric100(current.sequence)}</b></div></div><div class="card patient-encourage-card"><div class="big-emoji">🌱</div><h2>${tr('keepGoing')}</h2><p>${tr('practiceText')}</p><p class="muted">${tr('detailsDoctor')}</p></div></div>
+      <div class="card patient-session-card"><div class="section-head"><div><h2>📅 ${tr('sessionSummary')}</h2><p>${latest?new Date(latest.startedAt).toLocaleString():'—'}</p></div><span class="session-pill">${tr('session')} ${sessions.length}</span></div><div class="patient-session-stats"><div><small>${tr('responseSpeed')}</small><b>${fmtMetric(current.speed)}</b></div><div><small>${tr('attentionAccuracy')}</small><b>${fmtMetric(current.attention)}</b></div><div><small>${tr('sequence')}</small><b>${fmtMetric(current.sequence)}</b></div></div></div>
       <div class="patient-actions"><button class="btn primary" onclick="switchResultView('doctor')">${tr('viewDetailed')}</button><button class="btn secondary" onclick="downloadReport()">${tr('downloadResult')}</button><button class="btn secondary" onclick="newSession()">${tr('startAnother')}</button></div></div>
       <div class="result-view doctor-result-view hidden" id="doctorResultView"><div class="dash-hero"><div><div class="dash-badge">MEMORA • GENOGAME • ${tr('doctorView').toUpperCase()}</div><h1>${tr('doctorDashboard')}</h1><p>${esc2(profile?.name||'Patient')} • ID ${esc2(profile?.id||'')} ${profile?.age?`• ${tr('dobAge')}: ${esc2(profile.age)}`:''}</p></div><div class="dash-actions"><button class="btn secondary" onclick="downloadReport()">${tr('downloadReport')}</button><button class="btn primary" onclick="newSession()">${tr('newSession')}</button></div></div>
       <div class="patient-strip"><div><span>${tr('latestSession')}</span><b>${latest?new Date(latest.startedAt).toLocaleDateString():'—'}</b></div><div><span>${tr('totalSessions')}</span><b>${sessions.length}</b></div><div><span>${tr('mlProfile')}</span><b>${esc2(session?.mlPrediction?.performanceProfile||session?.mlPrediction?.prediction||tr('localAnalysis'))}</b></div><div><span>${tr('overallBehavior')}</span><b class="big-score">${current.overall}/100</b></div></div>
