@@ -490,16 +490,21 @@ canvas{
     0%,100%{ margin-left:0; } 20%{ margin-left:-8px; } 40%{ margin-left:8px; } 60%{ margin-left:-6px; } 80%{ margin-left:6px; }
 }
 
-.memory-card.fx-flyoff .back{ animation:cardFlyOff 3s ease-out forwards; position:relative; z-index:50; }
-@keyframes cardFlyOff{
-    0%{ transform:scale(1) translate(0,0) rotate(0deg); opacity:1; }
-    20%{ transform:scale(1.4) translate(0,-10px) rotate(-4deg); }
-    55%{ transform:scale(3.2) translate(0,-45vh) rotate(8deg); opacity:1; }
-    100%{ transform:scale(4.5) translate(0,-95vh) rotate(-6deg); opacity:0; }
+/* Correct-match indicator — the card stays exactly in place (fixes the
+   earlier bug where the fly-off animation made it look like the card was
+   vanishing before the rest of the board had been identified). Just a
+   brief "Correct" badge over the card, plus the voice line. */
+.memory-card.fx-correct{ outline:4px solid #20a66a; outline-offset:-4px; }
+.memory-card.fx-correct .back:after{
+    content:"✓ Correct"; position:absolute; left:50%; bottom:6px; transform:translateX(-50%);
+    background:#20a66a; color:#fff; font-size:11px; font-weight:800; padding:3px 10px;
+    border-radius:999px; animation:correctBadge 1.4s ease-out forwards;
 }
-.memory-card.fx-flyoff:after{
-    content:"🌼"; position:absolute; left:50%; top:0; font-size:20px;
-    transform:translate(-50%,0) scale(0); animation:flowerBloom 3s ease-out forwards;
+@keyframes correctBadge{
+    0%{ opacity:0; transform:translateX(-50%) translateY(6px); }
+    15%{ opacity:1; transform:translateX(-50%) translateY(0); }
+    80%{ opacity:1; }
+    100%{ opacity:0; }
 }
 
 /* Standalone celebration overlay for a popped balloon — decoupled from the
@@ -2816,7 +2821,6 @@ function resetMemoryCardsUI(){
 function resetBalloonUI(){
     if(balloonRunning) stopCamera();
     balloonRunning=false; balloonRound=0; balloonSequence=[]; balloonExpected=0; balloonData=null;
-    balloonMode='A';
     $("balloonBoard").innerHTML="";
     $("balloonStart").disabled=false;
     $("balloonStatus").textContent=t("cameraOff");
@@ -3589,21 +3593,15 @@ const balloonColors = [
 
 ];
 
-/* v1 spec additions: Mode A (ordered) / Mode B (alternating category),
-   input-mode toggle (camera / tap), and perseverative-vs-spread error
-   tracking per mode. */
+/* Single continuous session: 6 rounds, one growing sequence. No Mode A/B. */
 const BALLOON_MAX_ROUNDS = 6;
-const CATEGORY_A_COLORS = balloonColors.slice(0,4);
-const CATEGORY_B_COLORS = balloonColors.slice(4);
-let balloonMode = 'A';
 // Camera-only input. There is intentionally no tap/mouse fallback.
 let balloonInputMode = 'camera';
-let modeStartTime = 0;
-let balloonWrongLog = { A: [], B: [] };
-let balloonPerseverative = { A: 0, B: 0 };
-let balloonSpread = { A: 0, B: 0 };
-let balloonCorrectStreak = { A: 0, B: 0 };
-let balloonModeStats = { A: null, B: null };
+let sessionStartTime = 0;
+let balloonWrongLog = [];
+let balloonPerseverative = 0;
+let balloonSpread = 0;
+let balloonCorrectStreak = 0;
 
 // Camera-only mode: kept as a no-op compatibility function so any stale
 // saved state cannot switch the game to tap input.
@@ -3675,7 +3673,6 @@ async function startBalloonGame(){
 }
 
 function initBalloonSessionState(){
-    balloonMode='A';
     balloonRound=0;
     balloonSequence=[];
     balloonExpected=0;
@@ -3687,12 +3684,11 @@ function initBalloonSessionState(){
     canvasReady=false;
     balloonTouchLatch=null;
     balloonTouchLatchTime=0;
-    modeStartTime=performance.now();
-    balloonWrongLog={A:[],B:[]};
-    balloonPerseverative={A:0,B:0};
-    balloonSpread={A:0,B:0};
-    balloonCorrectStreak={A:0,B:0};
-    balloonModeStats={A:null,B:null};
+    sessionStartTime=performance.now();
+    balloonWrongLog=[];
+    balloonPerseverative=0;
+    balloonSpread=0;
+    balloonCorrectStreak=0;
 
     balloonData={
         rounds:[], maxSequence:0, failedAt:null, completed:false,
@@ -3769,26 +3765,17 @@ function nextBalloonRound(){
     balloonRound++;
 
     if(balloonRound > BALLOON_MAX_ROUNDS){
-        finishBalloonMode();
+        finishBalloon(true);
         return;
     }
 
-    if(balloonMode === 'A'){
-        balloonSequence.push(balloonColors[Math.floor(Math.random()*balloonColors.length)]);
-    }else{
-        // Mode B: strictly alternate between the two colour categories at
-        // each successive position — the TMT-B "1-A-2-B..." analog.
-        const cat = (balloonSequence.length % 2 === 0) ? CATEGORY_A_COLORS : CATEGORY_B_COLORS;
-        balloonSequence.push(cat[Math.floor(Math.random()*cat.length)]);
-    }
+    balloonSequence.push(balloonColors[Math.floor(Math.random()*balloonColors.length)]);
 
     balloonExpected = 0;
 
-    $("balloonRound").textContent = "Mode " + balloonMode + " — Round " + balloonRound + " / " + BALLOON_MAX_ROUNDS;
+    $("balloonRound").textContent = "Round " + balloonRound + " / " + BALLOON_MAX_ROUNDS;
 
-    $("balloonInstruction").textContent = balloonMode === 'A'
-        ? (typeof dt==='function' ? dt('rememberBalloons',{n:balloonRound}) : `Remember ${balloonRound} balloon${balloonRound>1?"s":""}. Pop them in the same order.`)
-        : "Pop them in order, alternating between the two colour groups.";
+    $("balloonInstruction").textContent = typeof dt==='function' ? dt('rememberBalloons',{n:balloonRound}) : `Remember ${balloonRound} balloon${balloonRound>1?"s":""}. Pop them in the same order.`;
 
     renderSequencePreview();
 
@@ -3962,7 +3949,7 @@ function processBalloonPop(hitBalloon, hitIndex){
     balloonData.totalAttempts++;
     balloonData.reactionTimes.push(reactionMs);
     balloonData.rounds.push({
-        round: balloonRound, mode: balloonMode, position: hitIndex+1, expectedPosition: expectedIndex+1,
+        round: balloonRound, position: hitIndex+1, expectedPosition: expectedIndex+1,
         color: hitColor, expectedColor, reactionMs, correct
     });
 
@@ -3971,19 +3958,18 @@ function processBalloonPop(hitBalloon, hitIndex){
         $("balloonStatus").textContent = dt("wrongBalloon");
         try{ playFeedback(hitBalloon, 'wrong', {voiceLine:"No I'm not"}); }catch(e){}
 
-        const log = balloonWrongLog[balloonMode];
-        if(log.length && log[log.length-1] === hitIndex){
-            balloonPerseverative[balloonMode]++;
+        if(balloonWrongLog.length && balloonWrongLog[balloonWrongLog.length-1] === hitIndex){
+            balloonPerseverative++;
         }else{
-            balloonSpread[balloonMode]++;
+            balloonSpread++;
         }
-        log.push(hitIndex);
+        balloonWrongLog.push(hitIndex);
         return;
     }
 
     balloonData.correctPops++;
-    balloonCorrectStreak[balloonMode] = (balloonCorrectStreak[balloonMode] || 0) + 1;
-    const voiceLine = balloonCorrectStreak[balloonMode] <= 1 ? "Yeah it's me" : "Super work";
+    balloonCorrectStreak = (balloonCorrectStreak || 0) + 1;
+    const voiceLine = balloonCorrectStreak <= 1 ? "Yeah it's me" : "Super work";
 
     try{
         const board = $("balloonBoard");
@@ -4028,10 +4014,23 @@ function onHandResults(res){
         balloonData.handDetections++;
         if(session?.behavioral) session.behavioral.handDetections++;
         const lm=res.multiHandLandmarks[0];
-        if(typeof drawConnectors === "function" && typeof HAND_CONNECTIONS !== "undefined") drawConnectors(ctx,lm,HAND_CONNECTIONS,{lineWidth:2});
-        if(typeof drawLandmarks === "function") drawLandmarks(ctx,lm,{lineWidth:1});
         const indexTip=lm[8];
-        if(indexTip) checkBalloonHit(indexTip.x,indexTip.y);
+        if(indexTip){
+            // Single tracking dot at the fingertip, not the full 21-point skeleton —
+            // simpler and clearer for a touch-based game. Drawn at the raw landmark
+            // position: the canvas itself is CSS-mirrored (scaleX(-1)), so this
+            // automatically appears aligned with the visible, mirrored hand.
+            const px = indexTip.x * canvas.width;
+            const py = indexTip.y * canvas.height;
+            ctx.beginPath();
+            ctx.arc(px, py, 14, 0, 2*Math.PI);
+            ctx.fillStyle = "rgba(83,103,255,0.85)";
+            ctx.fill();
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = "#fff";
+            ctx.stroke();
+            checkBalloonHit(indexTip.x,indexTip.y);
+        }
     }
     $("handCount").textContent=balloonData.handDetections;
 }
@@ -4049,30 +4048,6 @@ function onFaceResults(res){
     $("headMovement").textContent=Number(balloonData.headMovement||0).toFixed(2);
 }
 
-function finishBalloonMode(){
-    const roundsThisMode = balloonData.rounds.filter(r => r.mode === balloonMode);
-    balloonModeStats[balloonMode] = {
-        timeMs: Math.round(performance.now() - modeStartTime),
-        errorCount: roundsThisMode.filter(r => !r.correct).length,
-        attempts: roundsThisMode.length,
-        perseverativeErrors: balloonPerseverative[balloonMode],
-        spreadErrors: balloonSpread[balloonMode]
-    };
-
-    if(balloonMode === 'A'){
-        balloonMode = 'B';
-        balloonRound = 0;
-        balloonSequence = [];
-        balloonExpected = 0;
-        modeStartTime = performance.now();
-        $("balloonStatus").textContent = "Mode A complete — starting Mode B.";
-        speak("Now let's try a new pattern.");
-        setTimeout(nextBalloonRound, 1200);
-    }else{
-        finishBalloon(true);
-    }
-}
-
 function finishBalloon(completed){
 
     balloonRunning = false;
@@ -4080,12 +4055,9 @@ function finishBalloon(completed){
     balloonData.failedAt = completed ? null : balloonRound;
     balloonData.completed = completed;
     balloonData.durationMs = Date.now() - new Date(balloonData.startedAt).getTime();
-
-    balloonData.modeA = balloonModeStats.A || {timeMs:0,errorCount:0,attempts:0,perseverativeErrors:0,spreadErrors:0};
-    balloonData.modeB = balloonModeStats.B || {timeMs:0,errorCount:0,attempts:0,perseverativeErrors:0,spreadErrors:0};
-    balloonData.modeBMinusModeA = balloonData.modeB.timeMs - balloonData.modeA.timeMs;
-    balloonData.perseverativeErrors = (balloonPerseverative.A||0) + (balloonPerseverative.B||0);
-    balloonData.spreadErrors = (balloonSpread.A||0) + (balloonSpread.B||0);
+    balloonData.timeMs = Math.round(performance.now() - sessionStartTime);
+    balloonData.perseverativeErrors = balloonPerseverative;
+    balloonData.spreadErrors = balloonSpread;
 
     session.games.catchBalloon = balloonData;
 
@@ -4098,7 +4070,7 @@ function finishBalloon(completed){
     stopCamera();
 
     $("balloonStatus").textContent = completed
-        ? "Excellent — both rounds completed."
+        ? "Excellent — all 6 rounds completed."
         : `Game ended at round ${balloonRound}.`;
 
     setTimeout(() => show("gameSelectScreen"), 800);
@@ -4140,11 +4112,9 @@ function stopCamera(){
 }
 
 /* =========================================================
-   BALLOON SCORING — v1 spec
-   Mode A (ordered) / Mode B (alternating category) scored
-   separately, plus B-A (executive/switching cost, isolated
-   from raw processing speed). Legacy `.score` kept for
-   scoreSession() / older dashboard code.
+   BALLOON SCORING
+   Single 6-round session — accuracy (70%) + time-delay (30%).
+   Legacy `.score` kept for scoreSession() / older dashboard code.
 ========================================================= */
 
 function getBalloonStats(b){
@@ -4153,15 +4123,10 @@ function getBalloonStats(b){
     const wrong = rounds.filter(x => x.correct === false).length;
     const total = rounds.length;
 
-    const modeA = b?.modeA || {timeMs:0,errorCount:0,attempts:0,perseverativeErrors:0,spreadErrors:0};
-    const modeB = b?.modeB || {timeMs:0,errorCount:0,attempts:0,perseverativeErrors:0,spreadErrors:0};
-    const modeBMinusModeA = Number(b?.modeBMinusModeA) || 0;
-
-    const accA = modeA.attempts ? clamp(100 - (modeA.errorCount/modeA.attempts)*100) : 100;
-    const accB = modeB.attempts ? clamp(100 - (modeB.errorCount/modeB.attempts)*100) : 100;
-    const timeScoreA = modeA.timeMs ? clamp(100 - (modeA.timeMs/1000)*0.8) : 100;
-    const timeScoreB = modeB.timeMs ? clamp(100 - (modeB.timeMs/1000)*0.8) : 100;
-    const score = Math.round(clamp(((accA*0.7 + timeScoreA*0.3) + (accB*0.7 + timeScoreB*0.3)) / 2));
+    const timeMs = Number(b?.timeMs) || 0;
+    const acc = total ? clamp(100 - (wrong/total)*100) : 100;
+    const timeScore = timeMs ? clamp(100 - (timeMs/1000)*0.8) : 100;
+    const score = Math.round(clamp(acc*0.7 + timeScore*0.3));
 
     const reactions = rounds.map(x => Number(x.reactionMs)).filter(x => Number.isFinite(x) && x >= 0);
     const averageReaction = reactions.length ? Math.round(reactions.reduce((a,v) => a+v, 0) / reactions.length) : 0;
@@ -4169,8 +4134,7 @@ function getBalloonStats(b){
     const slowestReaction = reactions.length ? Math.max(...reactions) : 0;
 
     return {
-        correct, wrong, total, score, averageReaction, fastestReaction, slowestReaction,
-        modeA, modeB, modeBMinusModeA,
+        correct, wrong, total, score, averageReaction, fastestReaction, slowestReaction, timeMs,
         perseverativeErrors: Number(b?.perseverativeErrors) || 0,
         spreadErrors: Number(b?.spreadErrors) || 0
     };
@@ -6221,7 +6185,15 @@ beginSession=function(){
         if(correct){
           cards[pair[0]].matched=cards[pair[1]].matched=true;
           elA?.classList.add('matched'); elB?.classList.add('matched');
-          try{ playFeedback(elA,'match',{voiceLine:"Whoo! It's two "+cards[pair[0]].name+"s!"}); playFeedback(elB,'match',{}); }catch(e){}
+          try{
+            playTone('match');
+            speak("Whoo! It's two "+cards[pair[0]].name+"s!");
+            [elA,elB].forEach(el=>{
+              if(!el) return;
+              el.classList.add('fx-correct');
+              setTimeout(()=>el.classList.remove('fx-correct'), 1400);
+            });
+          }catch(e){}
           matched++;
         }else{
           elA?.classList.remove('flipped'); elB?.classList.remove('flipped');
@@ -6302,9 +6274,11 @@ beginSession=function(){
     const retentionRatePct=clamp2(num(mj.retentionRate)*100);
     const stoppingPoint=num(mj.stoppingPoint);
 
-    const modeA=b.modeA||{timeMs:0,errorCount:0,attempts:0};
-    const modeB=b.modeB||{timeMs:0,errorCount:0,attempts:0};
-    const modeBMinusModeA=num(b.modeBMinusModeA);
+    const bRounds=Array.isArray(b.rounds)?b.rounds:[];
+    const bTotal=bRounds.length, bWrong=bRounds.filter(r=>r.correct===false).length;
+    const bTimeMs=num(b.timeMs);
+    const bMaxSeq=num(b.maxSequence);
+    const bPersev=num(b.perseverativeErrors), bSpreadErr=num(b.spreadErrors);
     const mcTrials=num(mm.trialsToSuccess);
     const mcErrors=num(mm.totalErrors);
     const mcPersev=num(mm.perseverativeErrors);
@@ -6315,21 +6289,21 @@ beginSession=function(){
     const memoryCardsEfficiency=mcTrials?clamp2(100-mcErrors*6-mcPersev*4):sc.g2;
     const memory=(curve.length&&mcTrials)?(journeySignal+memoryCardsEfficiency)/2:Math.max(journeySignal,memoryCardsEfficiency);
 
-    // RESPONSE SPEED / ATTENTION: Balloon Mode A (TMT-A analog — processing speed + accuracy)
-    const speed=modeA.timeMs?clamp2(100-(modeA.timeMs/45000*100)):sc.g3;
-    const attention=modeA.attempts?clamp2(100-(modeA.errorCount/modeA.attempts)*100):sc.g3;
+    // RESPONSE SPEED / ATTENTION: Balloon session time + accuracy
+    const speed=bTimeMs?clamp2(100-(bTimeMs/45000*100)):sc.g3;
+    const attention=bTotal?clamp2(100-(bWrong/bTotal)*100):sc.g3;
 
-    // EXECUTIVE / ERROR CONTROL: Balloon B-A switching cost + Memory Cards perseveration
-    const executiveFromBalloon=modeB.attempts?clamp2(100-(modeBMinusModeA/15000*100)):50;
+    // EXECUTIVE / ERROR CONTROL: Balloon perseveration + Memory Cards perseveration
+    const executiveFromBalloon=bTotal?clamp2(100-bPersev*8):50;
     const executiveFromMemoryCards=mcTrials?clamp2(100-mcPersev*8):50;
-    const errorControl=(modeB.attempts||mcTrials)?(executiveFromBalloon+executiveFromMemoryCards)/2:sc.g3;
+    const errorControl=(bTotal||mcTrials)?(executiveFromBalloon+executiveFromMemoryCards)/2:sc.g3;
 
-    // SEQUENCE / VISUOSPATIAL: Memory Cards stage progression + Balloon Mode B accuracy
+    // SEQUENCE / VISUOSPATIAL: Memory Cards stage progression + Balloon max round reached (of 6)
     const stageProgress=num(mm.pairCountFinal)?clamp2((num(mm.pairCountFinal)-2)/6*100):0;
-    const modeBAcc=modeB.attempts?clamp2(100-(modeB.errorCount/modeB.attempts)*100):null;
-    const sequence=modeBAcc!=null?(stageProgress+modeBAcc)/2:(stageProgress||sc.g3);
+    const balloonSeqProgress=bMaxSeq?clamp2((bMaxSeq/6)*100):null;
+    const sequence=balloonSeqProgress!=null?(stageProgress+balloonSeqProgress)/2:(stageProgress||sc.g3);
 
-    const rawErrors=mcErrors+num(modeA.errorCount)+num(modeB.errorCount);
+    const rawErrors=mcErrors+bWrong;
     const overall=Math.round((memory+speed+attention+errorControl+sequence)/5);
 
     return {
@@ -6337,10 +6311,10 @@ beginSession=function(){
       errors:Math.round(rawErrors), errorControl:pct(errorControl), sequence:pct(sequence), overall:pct(overall),
       g1:pct(sc.g1), g2:pct(sc.g2), g3:pct(sc.g3),
       retentionRate:Math.round(retentionRatePct), stoppingPoint, retentionCurve:curve,
-      perseverativeErrors:mcPersev+num(b.perseverativeErrors),
+      perseverativeErrors:mcPersev+bPersev,
       memoryCardsPerseverative:mcPersev, memoryCardsSpread:mcSpreadErr,
-      balloonPerseverative:num(b.perseverativeErrors), balloonSpread:num(b.spreadErrors),
-      modeATimeMs:modeA.timeMs, modeBTimeMs:modeB.timeMs, modeBMinusModeA
+      balloonPerseverative:bPersev, balloonSpread:bSpreadErr,
+      balloonTimeMs:bTimeMs, balloonMaxSequence:bMaxSeq
     };
   }
 
@@ -6513,27 +6487,24 @@ beginSession=function(){
       lines.push(`<div><b>Memory Cards</b><span>${sentences.join(' ')}</span></div>`);
     }
 
-    // Catch the Balloon — compare Mode A (fixed order) vs Mode B (pattern
-    // switches), since the difference itself is the meaningful signal.
-    if(g3.modeA || g3.modeB){
-      const a=g3.modeA||{}, b=g3.modeB||{};
+    // Catch the Balloon — single 6-round growing sequence.
+    if(Array.isArray(g3.rounds) && g3.rounds.length){
+      const wrongCount = g3.rounds.filter(r=>r.correct===false).length;
       const sentences=[];
-      sentences.push(`He made ${num(a.errorCount)} wrong pop${num(a.errorCount)===1?'':'s'} in the first pattern.`);
-      if(b.attempts){
-        sentences.push(`When the pattern started switching, he made ${num(b.errorCount)} wrong pop${num(b.errorCount)===1?'':'s'}.`);
-        if(num(g3.modeBMinusModeA)>3000){
-          sentences.push('He took noticeably longer once the pattern began switching, suggesting some difficulty adjusting.');
-        }
+      sentences.push(`He reached round ${num(g3.maxSequence)} of 6.`);
+      sentences.push(`He made ${wrongCount} wrong pop${wrongCount===1?'':'s'} in total.`);
+      if(num(g3.perseverativeErrors)>0){
+        sentences.push(`He touched the same wrong balloon ${num(g3.perseverativeErrors)} time${num(g3.perseverativeErrors)===1?'':'s'} in a row.`);
       }
       lines.push(`<div><b>Catch the Balloon</b><span>${sentences.join(' ')}</span></div>`);
     }
 
     return lines.length ? `<div class="evidence-list">${lines.join('')}</div>` : '';
   }
-  function evidenceHtml(s){if(!s)return '';const g=s.games||{},g1=g.memoryJourney||{},g2=g.memoryCards||{},g3=g.catchBalloon||{};return `<div class="evidence-list"><div><b>Memory Journey</b><span>${(g1.checkpoints||[]).length} checkpoint(s) reached • ${num(g1.correct)}/${num(g1.total)} questions correct</span></div><div><b>Memory Cards</b><span>${num(g2.trialsToSuccess)} card flips • ${num(g2.totalErrors)} wrong pairs • same-card repeats ${num(g2.perseverativeErrors)} • spread errors ${num(g2.spreadErrors)}</span></div><div><b>Balloon Sequence</b><span>Mode A: ${num(g3.modeA?.errorCount)} wrong pops • Mode B: ${num(g3.modeB?.errorCount)} wrong pops • switch cost ${g3.modeBMinusModeA!=null?Math.round(g3.modeBMinusModeA/1000)+'s':'—'}</span></div></div>${narrativeFeedback(s)}`;}
+  function evidenceHtml(s){if(!s)return '';const g=s.games||{},g1=g.memoryJourney||{},g2=g.memoryCards||{},g3=g.catchBalloon||{};return `<div class="evidence-list"><div><b>Memory Journey</b><span>${(g1.checkpoints||[]).length} checkpoint(s) reached • ${num(g1.correct)}/${num(g1.total)} questions correct</span></div><div><b>Memory Cards</b><span>${num(g2.trialsToSuccess)} card flips • ${num(g2.totalErrors)} wrong pairs • same-card repeats ${num(g2.perseverativeErrors)} • spread errors ${num(g2.spreadErrors)}</span></div><div><b>Balloon Sequence</b><span>Round reached: ${num(g3.maxSequence)}/6 • wrong pops: ${num(g3.wrongAttempts)} • same-balloon repeats: ${num(g3.perseverativeErrors)}</span></div></div>${narrativeFeedback(s)}`;}
   function game1Html(s){const g=s?.games?.memoryJourney||{};const curve=g.checkpoints||[];return `<div class="mini-stats"><span>Score <b>${num(g.score)}</b></span><span>Checkpoints reached <b>${curve.length}/6</b></span><span>Correct answers <b>${num(g.correct)}/${num(g.total)}</b></span><span>Retention rate <b>${g.retentionRate!=null?Math.round(g.retentionRate*100)+'%':'—'}</b></span></div>`;}
   function game2Html(s){const g=s?.games?.memoryCards||{};return `<div class="mini-stats"><span>Score <b>${num(g.score)}</b></span><span>Stages completed <b>${num(g.stagesCompleted)}/5</b></span><span>Total errors <b>${num(g.totalErrors)}</b></span><span>Same-card repeats <b>${num(g.perseverativeErrors)}</b></span><span>Spread errors <b>${num(g.spreadErrors)}</b></span></div>`;}
-  function game3Html(s){const g=s?.games?.catchBalloon||{};const a=g.modeA||{},b=g.modeB||{};return `<div class="mini-stats"><span>Score <b>${typeof scoreBalloon==='function'&&g?scoreBalloon(g):num(g.score)}</b></span><span>Mode A errors <b>${num(a.errorCount)}</b></span><span>Mode A time <b>${a.timeMs?Math.round(a.timeMs/1000)+'s':'—'}</b></span><span>Mode B errors <b>${num(b.errorCount)}</b></span><span>Mode B time <b>${b.timeMs?Math.round(b.timeMs/1000)+'s':'—'}</b></span><span>Switch cost (B−A) <b>${g.modeBMinusModeA!=null?Math.round(g.modeBMinusModeA/1000)+'s':'—'}</b></span></div>`;}
+  function game3Html(s){const g=s?.games?.catchBalloon||{};return `<div class="mini-stats"><span>Score <b>${typeof scoreBalloon==='function'&&g?scoreBalloon(g):num(g.score)}</b></span><span>Round reached <b>${num(g.maxSequence)}/6</b></span><span>Wrong pops <b>${num(g.wrongAttempts)}</b></span><span>Same-balloon repeats <b>${num(g.perseverativeErrors)}</b></span><span>Total time <b>${g.timeMs?Math.round(g.timeMs/1000)+'s':'—'}</b></span></div>`;}
   function mlHtml(s){const p=s?.mlPrediction;if(!p)return '<p class="muted">ML prediction is stored when the Python model is available. Local behavioral metrics remain available.</p>';return `<div class="ml-profile"><b>${esc(p.performanceProfile||p.prediction||'Profile')}</b><span>Confidence: ${p.confidence!=null?Math.round(num(p.confidence)*100)+'%':'—'}</span></div><p>${esc(p.recommendation||'Adaptive difficulty recommendation recorded.')}</p>`;}
 
   /* =========================================================
@@ -6577,8 +6548,8 @@ beginSession=function(){
     }
     if(/balloon/.test(q)){
       const b = latest.games?.catchBalloon||{};
-      if(!b.modeA && !b.modeB) return `${name} hasn't played Catch the Balloon yet in the latest session.`;
-      return `In Catch the Balloon, ${name} made ${num(b.modeA?.errorCount)} wrong pops in the first pattern and ${num(b.modeB?.errorCount)} once the pattern started switching.`;
+      if(!Array.isArray(b.rounds) || !b.rounds.length) return `${name} hasn't played Catch the Balloon yet in the latest session.`;
+      return `In Catch the Balloon, ${name} reached round ${num(b.maxSequence)} of 6, with ${num(b.wrongAttempts)} wrong pops in total.`;
     }
     if(/concern|worry|problem|wrong|issue|trouble/.test(q)){
       const text = narrativeFeedback(latest).replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
